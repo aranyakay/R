@@ -1,2 +1,2 @@
 # shuati folder
-# python
+Majorly python
