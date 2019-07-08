@@ -1,0 +1,206 @@
+###########################################
+#kaggle comp
+#titantic
+#practice
+###########################################
+
+
+fileLoc = c("D:/cj/book/titanic")
+
+#read in data
+
+gender = read.csv(paste(fileLoc, "/gender_submission.csv", sep=""))
+
+train = read.csv(paste(fileLoc, "/train.csv", sep=""))
+
+test = read.csv(paste(fileLoc, "/test.csv", sep=""))
+
+
+###########################################
+#logistic regression test begin
+###########################################
+#missing 
+sapply(train,function(x) sum(is.na(x)))
+
+#n of unique var
+sapply(train, function(x) length(unique(x)))
+
+#plot missing
+library(Amelia)
+missmap(train, main = "Missing values vs observed")
+
+
+#fill missing
+#MICE
+library(mice)
+
+#pattern
+md.pattern(train)
+
+
+#delete useless column
+#trainPrep = subset(train, select = -c(Cabin))
+init = mice(trainPrep, maxit=0)
+meth = init$method
+predM = init$predictorMatrix
+predM[, c("Age", "PassengerId", "Survived", "Name","Ticket")]=0 # will remove Age as a predictor but still will be imputed
+
+#build method table
+meth[c("SibSp", "Parch", "Fare")] = "pmm"
+meth[c("Sex")] = "logreg"
+meth[c("Pclass")] = "Proportional odds model"
+meth[c("Embarked")] = "polyreg"
+
+
+#impute
+set.seed(123)
+
+imputeTrain = mice(trainPrep, method=meth, predictorMatrix=predM, m=5)
+
+#check imputed num
+imputeTrain$imp$Age
+
+#fill the missing with the 3rd imputation
+imputeTrain = complete(imputeTrain, 3)
+
+# imputeTrain$Cabin = train$Cabin
+imputeTrain = subset(imputeTrain, select = -c(Cabin, Name, PassengerId, Ticket))
+
+
+
+#logistic regression begin
+model <- glm(Survived ~., family = binomial(link = 'logit'), data = imputeTrain)
+summary(model)
+
+# 
+# model2 <- glm(Survived ~., family = quasibinomial, data = imputeTrain)
+# summary(model2)
+
+# run the anova() function on the model to analyze the table of deviance
+
+anova(model, test="Chisq")
+# anova(model2, test="Chisq")
+
+
+#test for stepwise var selection
+library(MASS)
+step.model <- model %>% stepAIC(trace = FALSE)
+coef(step.model)
+
+#test for some theories
+
+
+#theory, sibsp and parch will affect survival rate
+
+#test for age: category
+imputeTrain$ageCat <- cut(imputeTrain$Age, c(0,10,20,30,40,50,60), labels=c(1:6))
+
+imputeTrain$ageCat = as.factor(imputeTrain$ageCat)
+
+test <- glm(Survived ~Pclass + Sex + ageCat + SibSp, family = binomial(link="logit"), data = imputeTrain)
+summary(test)
+
+test2 <- glm(Survived ~Pclass + ageCat*Embarked + Sex + ageCat + SibSp, family = binomial(link="logit"), data = imputeTrain)
+
+summary(test2)
+
+#theory approved, different age group act differently on sibsp and parch
+
+#theory: age and embark has some interaction
+#theory approved
+
+
+#theory: fare has some significant part if with decent transformation
+summary(imputeTrain$Survived[imputeTrain$Fare>=31])
+summary(imputeTrain$Survived[imputeTrain$Fare<=10])
+#58% vs 20%, something here
+#theory approved
+
+
+#transform age to categorical var
+#transform fare to categorical var
+#add all lv-one interaction
+#stepwise regression
+library(dplyr)
+
+imputeTrain2 = imputeTrain %>% 
+  mutate(age10 = ifelse(Age %in% c(0,9),1,0), age20 = ifelse(Age %in% c(10,19),1,0),
+         age30 = ifelse(Age %in% c(20,29),1,0), age40 = ifelse(Age %in% c(30,39),1,0),
+         age50 = ifelse(Age %in% c(40,49),1,0), age60 = ifelse(Age %in% c(50,59),1,0),
+         age60plus = ifelse(Age >= 60,1,0), fareTop = ifelse(Fare >= quantile(Fare,.75),1,0),
+         fareBottom = ifelse(Fare <= quantile(Fare,.25),1,0) )
+
+imputeTrain2 = subset(imputeTrain2, select = -c(ageCat))
+
+
+#data done, now add all interactions lv1
+
+model2 <- glm(Survived ~., family = binomial(link = 'logit'), data = imputeTrain2)
+summary(model2)
+
+#k = qchisq(p, 1, lower.tail = F), For instance, for p = 0.05, set k = 3.8415.
+
+step(model2, scope = . ~ .^2, direction = "forward", k = 3.8415)
+
+
+# last result
+#this is the lowest aic model
+
+modelFinal <- glm(formula = Survived ~ Pclass + Sex + Age + SibSp + Parch + 
+                    Fare + Embarked + age10 + age20 + age30 + age40 + age50 + 
+                    age60 + age60plus + fareTop + fareBottom + Pclass:Sex + Sex:fareBottom + 
+                    Embarked:age30 + Age:Parch + Age:SibSp + Sex:age10, family = binomial(link = "logit"), 
+                  data = imputeTrain2)
+
+summary(modelFinal) #AIC: 757.19
+
+
+#only keep significant ones
+modelFinal2 <- glm(Survived ~ Pclass + Sex + Age + SibSp + Parch + 
+                     age10 + fareBottom + Pclass:Sex + Sex:fareBottom + 
+                     Embarked:age30 + Age:Parch + Age:SibSp + Sex:age10,
+                   family = binomial(link = "logit"), data = imputeTrain2)
+
+summary(modelFinal2) #AIC: 746.16
+
+
+fitted.results <- predict(modelFinal2, imputeTrain2,type='response')
+fitted.results <- ifelse(fitted.results > 0.5,1,0)
+
+misClasificError <- mean(fitted.results != imputeTrain2$Survived)
+print(paste('Accuracy',1-misClasificError))
+
+
+#test in test data
+test2 = test %>% 
+  mutate(age10 = ifelse(Age %in% c(0,9),1,0), age20 = ifelse(Age %in% c(10,19),1,0),
+         age30 = ifelse(Age %in% c(20,29),1,0), age40 = ifelse(Age %in% c(30,39),1,0),
+         age50 = ifelse(Age %in% c(40,49),1,0), age60 = ifelse(Age %in% c(50,59),1,0),
+         age60plus = ifelse(Age >= 60,1,0), fareTop = ifelse(Fare >= 31,1,0),
+         fareBottom = ifelse(Fare <= 7.9104,1,0) )
+
+
+fitted.results2 <- predict(modelFinal2, test2,type='response')
+fitted.results2 <- ifelse(fitted.results2 > 0.5,1,0)
+
+
+#another method for subseting
+#relative importance
+library(relaimpo)
+modRI <- glm(formula = Survived ~ Pclass + Sex + Age + SibSp + Parch + 
+               Fare + Embarked + age10 + age20 + age30 + age40 + age50 + 
+               age60 + age60plus + fareTop + fareBottom + Pclass:Sex + Sex:fareBottom + 
+               Embarked:age30 + Age:Parch + Age:SibSp + Sex:age10, 
+             family = binomial(link = 'logit'), data = imputeTrain2)  # fit lm() model
+relImportance <- calc.relimp(modRI, type = "glm", rela = TRUE)  # calculate relative importance scaled to 100
+sort(relImportance$lmg, decreasing=TRUE)  # relative importance
+
+
+
+model2 <- glm(Survived ~., family = binomial(link = 'logit'), data = imputeTrain2)
+summary(model2)
+
+#k = qchisq(p, 1, lower.tail = F), For instance, for p = 0.05, set k = 3.8415.
+
+step(model2, scope = . ~ .^2, direction = "forward", k = 3.8415)
+
