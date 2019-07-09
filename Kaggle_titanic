@@ -168,11 +168,47 @@ fitted.results <- predict(modelFinal2, imputeTrain2,type='response')
 fitted.results <- ifelse(fitted.results > 0.5,1,0)
 
 misClasificError <- mean(fitted.results != imputeTrain2$Survived)
-print(paste('Accuracy',1-misClasificError))
+print(paste('Accuracy',1-misClasificError)) #0.823793490460157
 
 
+###########################################################
 #test in test data
-test2 = test %>% 
+#fill in missing
+
+#pattern
+md.pattern(test)
+
+
+#delete useless column
+#trainPrep = subset(train, select = -c(Cabin))
+init = mice(test, maxit=0)
+meth = init$method
+predM = init$predictorMatrix
+predM[, c("Age", "PassengerId", "Name","Ticket", "Fare")]=0 # will remove Age as a predictor but still will be imputed
+
+#build method table
+meth[c("SibSp", "Parch", "Fare", "Age")] = "pmm"
+meth[c("Sex")] = "logreg"
+meth[c("Pclass")] = "Proportional odds model"
+meth[c("Embarked")] = "polyreg"
+
+
+#impute
+set.seed(123)
+
+imputeTest = mice(test, method=meth, predictorMatrix=predM, m=5)
+
+#check imputed num
+imputeTest$imp$Age
+
+#fill the missing with the 3rd imputation
+imputeTest = complete(imputeTest, 3)
+
+# imputeTrain$Cabin = train$Cabin
+imputeTest = subset(imputeTest, select = -c(Cabin, Name, PassengerId, Ticket))
+
+
+imputeTest2 = imputeTest %>%
   mutate(age10 = ifelse(Age %in% c(0,9),1,0), age20 = ifelse(Age %in% c(10,19),1,0),
          age30 = ifelse(Age %in% c(20,29),1,0), age40 = ifelse(Age %in% c(30,39),1,0),
          age50 = ifelse(Age %in% c(40,49),1,0), age60 = ifelse(Age %in% c(50,59),1,0),
@@ -180,27 +216,260 @@ test2 = test %>%
          fareBottom = ifelse(Fare <= 7.9104,1,0) )
 
 
-fitted.results2 <- predict(modelFinal2, test2,type='response')
+fitted.results2 <- predict(modelFinal2, imputeTest2,type='response')
 fitted.results2 <- ifelse(fitted.results2 > 0.5,1,0)
-
+misClasificError <- mean(fitted.results2 != gender$Survived)
+print(paste('Accuracy',1-misClasificError)) #0.925837320574163
+##########################################################################################
 
 #another method for subseting
-#relative importance
-library(relaimpo)
-modRI <- glm(formula = Survived ~ Pclass + Sex + Age + SibSp + Parch + 
-               Fare + Embarked + age10 + age20 + age30 + age40 + age50 + 
-               age60 + age60plus + fareTop + fareBottom + Pclass:Sex + Sex:fareBottom + 
-               Embarked:age30 + Age:Parch + Age:SibSp + Sex:age10, 
-             family = binomial(link = 'logit'), data = imputeTrain2)  # fit lm() model
-relImportance <- calc.relimp(modRI, type = "glm", rela = TRUE)  # calculate relative importance scaled to 100
-sort(relImportance$lmg, decreasing=TRUE)  # relative importance
+#LASSO
+library(glmnet)
+
+xTrain <- data.matrix(imputeTrain2[,2:17])
+yTrain <- data.matrix(imputeTrain2[,1])
+
+modLasso <- glmnet( xTrain, imputeTrain2[,1],
+                   alpha=1, nlambda=100, lambda.min.ratio=0.0001,family="binomial")
+
+modCV <- cv.glmnet(xTrain, imputeTrain2[,1], alpha=1,family="binomial", 
+                   nlambda=100, type.measure = "class")
+
+
+plot(modCV)
+best.lambda <- modCV$lambda.min
+best.lambda
+co <- coef(modCV, s = "lambda.min")
+
+p <- predict(modLasso, s=best.lambda, type="coefficients") [1:10,]
+
+#predict output values based on selected predictors
+p <- predict(modCV, s=best.lambda, newx=xTrain,type="class")
+# Calculate accuracy
+Accuracy <- mean(p==yTrain) #0.8024691
+
+#predict output values based on selected predictors
+#predict test data
+p <- predict(modCV, s=best.lambda, newx=data.matrix(imputeTest2), type="class")
+# Calculate accuracy
+Accuracy <- mean(p==gender$Survived) #0.9497608
+
+
+##################################################################
+#####################not working so well
+#####################test data could missing some major categories
+##################################################################
+#trying to add all interaction before lasso step
+# First step: using .*. for all interactions
+f <- as.formula(Survived ~ .*.)
+# yTrain <- data.matrix(imputeTrain2[,1])
+xTrain2 <- model.matrix(f, imputeTrain2)
+
+
+modLasso2 <- glmnet( xTrain2, imputeTrain2[,1],
+                    alpha=1, nlambda=100, lambda.min.ratio=0.0001,family="binomial")
+
+modCV2 <- cv.glmnet(xTrain2, imputeTrain2[,1], alpha=1,family="binomial", 
+                   nlambda=100, type.measure = "class")
+
+
+plot(modCV2)
+best.lambda <- modCV2$lambda.min
+best.lambda
+co <- coef(modCV2, s = "lambda.min")
+
+p <- predict(modLasso2, s=best.lambda, type="coefficients") [1:10,]
+
+#predict output values based on selected predictors
+p <- predict(modCV2, s=best.lambda, newx=xTrain2, type="class")
+# Calculate accuracy
+Accuracy <- mean(p==yTrain) #0.8361392
+
+
+#predict output values based on selected predictors
+#predict test data
+imputeTest3 = cbind.data.frame(gender$Survived, imputeTest2)
+colnames(imputeTest3)[1]="Survived"
+
+
+# imputeTest4 <- rbind.data.frame(imputeTest3, rep(NA, 17))
+# imputeTest4[419,"Embarked"] <-
+
+xTest <- model.matrix(f, imputeTest3)
+
+#fill the missing category
+# addOn <- matrix(NA, 418, 16)
+addOn <- matrix(0, 418, 16)
+colnames(addOn) <- colnames(xTrain2)[!(colnames(xTrain2) %in% colnames(xTest))]
+
+xTest2 <- cbind.data.frame(xTest, addOn)
+
+
+p <- predict(modCV2, s=best.lambda, newx=data.matrix(xTest2), type="class")
+# Calculate accuracy
+Accuracy <- mean(p==gender$Survived) #0.6315789
+##################################################################
+#####################not working so well sign end
+##################################################################
 
 
 
-model2 <- glm(Survived ~., family = binomial(link = 'logit'), data = imputeTrain2)
+
+#####################################
+#KNN test begin
+
+#normalization data
+normalize <- function(x) {
+  return ((x - min(x)) / (max(x) - min(x))) }
+
+imputeTrain3 <- as.data.frame(lapply(imputeTrain2[,c(4,7)], normalize))
+colnames(imputeTrain3) <- c("ageNorm", "fareNorm")
+imputeTrain3 <- cbind.data.frame(imputeTrain2, imputeTrain3)
+
+
+#cabin might affect?
+#missing going to bottom level
+#define cabine to A-F, missing going to G
+cabin <- cbind.data.frame(train$Cabin, rep("", nrow(train)))
+colnames(cabin) <- c("Cabin", "cabinCat")
+cabin[] <- lapply(cabin, as.character)
+
+for(i in 1:nrow(cabin)){
+  cabin$cabinCat[i] <- ifelse(grepl("A", cabin$Cabin[i]), "A",
+                          ifelse(grepl("B", cabin$Cabin[i]), "B",
+                                 ifelse(grepl("C", cabin$Cabin[i]), "C",
+                                        ifelse(grepl("D", cabin$Cabin[i]), "D",
+                                               ifelse(grepl("E", cabin$Cabin[i]), "E",
+                                                      ifelse(grepl("F", cabin$Cabin[i]), "F",
+                                                             ifelse(grepl("G", cabin$Cabin[i]), "G",
+                                                                    ifelse(cabin$Cabin[i]=="", "H",cabin$Cabin[i]))))))))
+}
+
+
+imputeTrain3 <- cbind.data.frame(imputeTrain3, cabin$cabinCat)
+colnames(imputeTrain3)[ncol(imputeTrain3)] <- "cabinCat"
+
+#pct by cabin cat
+imputeTrain3 %>% group_by(cabinCat) %>% summarise(proc = sum(Survived)/n(), minFare = min(Fare))
+
+
+#transform all categorical var to dummy var
+imputeTrain3 <- imputeTrain3 %>% 
+  mutate(cabinCatB = ifelse(cabinCat =="B",1,0), cabinCatC = ifelse(cabinCat =="C",1,0),
+         cabinCatD = ifelse(cabinCat =="D",1,0), cabinCatE = ifelse(cabinCat =="E",1,0),
+         cabinCatF = ifelse(cabinCat =="F",1,0), cabinCatG = ifelse(cabinCat =="G",1,0),
+         cabinCatH = ifelse(cabinCat =="H",1,0), cabinCatA = ifelse(cabinCat =="A",1,0),
+         EmbarkedC = ifelse(Embarked =="C",1,0), EmbarkedQ = ifelse(Embarked =="Q",1,0),
+         EmbarkedS = ifelse(Embarked =="S",1,0) )
+
+
+
+############
+#re run logistics regression
+
+
+ 
+
+model2 <- glm(Survived ~., family = binomial(link = 'logit'), data = imputeTrain3)
 summary(model2)
 
 #k = qchisq(p, 1, lower.tail = F), For instance, for p = 0.05, set k = 3.8415.
 
 step(model2, scope = . ~ .^2, direction = "forward", k = 3.8415)
 
+
+model2Final <- glm(formula = Survived ~ Pclass + Sex + Age + SibSp + Parch + 
+                     Fare + Embarked + age10 + age20 + age30 + age40 + age50 + 
+                     age60 + age60plus + fareTop + fareBottom + ageNorm + fareNorm + 
+                     cabinCat + cabinCatB + cabinCatC + cabinCatD + cabinCatE + 
+                     cabinCatF + cabinCatG + cabinCatH + cabinCatA + EmbarkedC + 
+                     EmbarkedQ + EmbarkedS + Pclass:Sex + Sex:fareBottom + Age:cabinCatE + 
+                     age30:EmbarkedS + Sex:cabinCatC + Age:Parch + age60:cabinCatC + 
+                     SibSp:cabinCatB + Parch:cabinCatC + Sex:ageNorm + Parch:EmbarkedQ + 
+                     SibSp:EmbarkedS + Sex:EmbarkedQ + Fare:cabinCatG + Pclass:fareTop + 
+                     SibSp:ageNorm + age40:cabinCatH + Sex:age10 + SibSp:cabinCatD, 
+                   family = binomial(link = "logit"), data = imputeTrain3)
+
+
+summary(model2Final) #AIC: 722.98
+
+
+#only keep significant ones
+#only keep variables that make means
+model2Final2 <- glm(formula = Survived ~ Pclass + Sex + Parch + 
+                      age10 + age20 + age30 + age40 +  age60 +
+                      age60plus + fareTop + fareNorm + Pclass:Sex + Sex:fareBottom + Age:cabinCatE + 
+                      age30:EmbarkedS + Sex:cabinCatC + Age:Parch +  
+                      SibSp:cabinCatB + Parch:cabinCatC + Sex:ageNorm + 
+                      SibSp:EmbarkedS + Sex:EmbarkedQ + Pclass:fareTop + 
+                      SibSp:ageNorm + age40:cabinCatH + Sex:age10 + SibSp:cabinCatD, 
+                    family = binomial(link = "logit"), data = imputeTrain3)
+
+
+summary(model2Final2) #AIC: 725.03
+
+
+fitted.results <- predict(model2Final2, imputeTrain3,type='response')
+fitted.results <- ifelse(fitted.results > 0.5,1,0)
+
+misClasificError <- mean(fitted.results != imputeTrain3$Survived)
+print(paste('Accuracy',1-misClasificError)) #0.851851851851852
+
+#######
+#######
+#apply it on test data
+
+cabinT <- cbind.data.frame(test$Cabin, rep("", nrow(test)))
+colnames(cabinT) <- c("Cabin", "cabinCat")
+cabinT[] <- lapply(cabinT, as.character)
+
+for(i in 1:nrow(cabinT)){
+  cabinT$cabinCat[i] <- ifelse(grepl("A", cabinT$Cabin[i]), "A",
+                              ifelse(grepl("B", cabinT$Cabin[i]), "B",
+                                     ifelse(grepl("C", cabinT$Cabin[i]), "C",
+                                            ifelse(grepl("D", cabinT$Cabin[i]), "D",
+                                                   ifelse(grepl("E", cabinT$Cabin[i]), "E",
+                                                          ifelse(grepl("F", cabinT$Cabin[i]), "F",
+                                                                 ifelse(grepl("G", cabinT$Cabin[i]), "G",
+                                                                        ifelse(cabinT$Cabin[i]=="", "H",cabinT$Cabin[i]))))))))
+}
+
+imputeTest4 <- na.omit(imputeTest4)
+
+
+imputeTest5 <- as.data.frame(lapply(imputeTest4[,c(4,7)], normalize))
+colnames(imputeTest5) <- c("ageNorm", "fareNorm")
+imputeTest5 <- cbind.data.frame(imputeTest4, imputeTest5)
+
+
+imputeTest5 <- cbind.data.frame(imputeTest5, cabinT$cabinCat)
+colnames(imputeTest5)[ncol(imputeTest5)] <- "cabinCat"
+
+imputeTest5 = imputeTest5 %>%
+  mutate(cabinCatB = ifelse(cabinCat =="B",1,0), cabinCatC = ifelse(cabinCat =="C",1,0),
+         cabinCatD = ifelse(cabinCat =="D",1,0), cabinCatE = ifelse(cabinCat =="E",1,0),
+         cabinCatF = ifelse(cabinCat =="F",1,0), cabinCatG = ifelse(cabinCat =="G",1,0),
+         cabinCatH = ifelse(cabinCat =="H",1,0), cabinCatA = ifelse(cabinCat =="A",1,0),
+         EmbarkedC = ifelse(Embarked =="C",1,0), EmbarkedQ = ifelse(Embarked =="Q",1,0),
+         EmbarkedS = ifelse(Embarked =="S",1,0) )
+
+
+
+
+
+fitted.results2 <- predict(model2Final2, imputeTest5,type='response')
+fitted.results2 <- ifelse(fitted.results2 > 0.5,1,0)
+misClasificError <- mean(fitted.results2 != gender$Survived)
+print(paste('Accuracy',1-misClasificError)) #0.870813397129187
+
+######################################################################################
+######################################################################################
+######################################################################################
+
+#what would be the actual data?
+#build an comparison dataset based on score difference
+actualResult <- gender
+actualResult$best <- fitted.results2
+actualResult$bestSum <- ifelse(actualResult$best != actualResult$Survived, actualResult$best, "")
+
+actualResult$current <- fitted.results2
