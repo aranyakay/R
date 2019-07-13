@@ -49,6 +49,10 @@ countNSay(6)
 countNSay(7)
 countNSay(50)
 
+#matrix n for number and count
+#matrix m for element and duplicates
+#collapse matrix m for result
+#need converse the matrix when output because default is by col
 
 
   
