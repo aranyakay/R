@@ -11,3 +11,4 @@ rob <- function(house){
 #judge by if rob current house
 #when yes, get current money and n-2 largest money
 #when no, use previous largest money
+#need pre-set first two zero to start
