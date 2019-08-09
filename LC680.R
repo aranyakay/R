@@ -35,3 +35,20 @@ LC680("greg")
 LC680("aba")
 
 LC680("abca")
+
+
+#a much cleaner way
+#does not mean much faster, though
+
+LC680 <- function(S){
+  result = F
+  if(s == sapply(lapply(strsplit(s, NULL), rev), paste, collapse="")) result = T
+  
+  for(i in 1:nchar(S)){
+    s = paste(substring(S, 1, i-1), ifelse(i<nchar(S), substring(S, i+1, nchar(S)), ""), sep="")
+    if(s == sapply(lapply(strsplit(s, NULL), rev), paste, collapse="")) result = T
+  }
+  return(result)
+}
+
+
