@@ -52,3 +52,17 @@ LC680 <- function(S){
 }
 
 
+#and this one also works, may looks better
+#still not mean faster or space saver
+
+LC680 <- function(S){
+  back <- function(a)sapply(lapply(strsplit(a, NULL), rev), paste, collapse="")
+  result = F
+  if(s == back(s)) result = T
+  
+  for(i in 1:nchar(S)){
+    s = paste(substring(S, 1, i-1), ifelse(i<nchar(S), substring(S, i+1, nchar(S)), ""), sep="")
+    if(s == back(s)) result = T
+  }
+  return(result)
+}
