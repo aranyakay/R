@@ -66,3 +66,31 @@ LC680 <- function(S){
   }
   return(result)
 }
+
+
+#something gonna be so fast
+
+
+LC680 <- function(S){
+  n = nchar(s)
+  left = 1
+  right = n
+  result = T
+  comp <- function(s, left, right){
+    result = T
+    while (left < right) {
+      if(substring(s, left, left) != substring(s, right, right) )     return(F)
+      left = left + 1
+      right = right -1
+    }
+    return(T)
+  }
+  while(left < right){ 
+    if(substring(s, left, left) != substring(s, right, right)) result = (comp(s, left+1, right)|comp(s, left, right-1))
+    left = left + 1
+    right = right - 1
+  }
+  return(result)
+  
+}
+
