@@ -31,3 +31,29 @@ LC383("a", "b")
 LC383("aa", "ab")
 
 LC383("aa", "aab")
+
+
+#three times faster
+#shrink one loop here
+
+
+LC383 <- function(ran, mag){
+  freq_dict = data.frame(id = character(), freq = numeric(), stringsAsFactors = F)
+  for(i in 1:nchar(mag)){
+    if(substring(mag, i, i) %in% freq_dict$id){
+      freq_dict$freq[freq_dict$id==substring(mag, i, i)] = freq_dict$freq[freq_dict$id==substring(mag, i, i)] +1
+    }else{
+      freq_dict[nrow(freq_dict) + 1, 1] = substring(mag, i, i)
+      freq_dict[nrow(freq_dict), 2] = 1
+    }
+  }
+  for(j in 1:nchar(ran)){
+    if(substring(ran, j, j) %in% freq_dict$id){
+      if(freq_dict$freq[freq_dict$id==substring(ran, j, j)]==0) return(F)
+      freq_dict$freq[freq_dict$id==substring(ran, j, j)] = freq_dict$freq[freq_dict$id==substring(ran, j, j)] -1
+    }else{
+      return(F)
+    }
+  }
+  return(T)
+}
